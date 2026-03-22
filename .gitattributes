@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Keep shell scripts as LF and executable mode handled by git index
+*.sh text eol=lf
+
+# Python sources
+*.py text eol=lf
+
