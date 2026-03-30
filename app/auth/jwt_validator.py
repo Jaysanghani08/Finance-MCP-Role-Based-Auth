@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import httpx
 import jwt
 from jwt import PyJWKClient
 
@@ -44,11 +43,4 @@ class Auth0JWTValidator:
             raise UnauthorizedError("Token subject missing")
 
         return AuthContext(sub=sub, tier=tier, scopes=scopes, exp=exp, aud=str(aud))
-
-    async def get_openid_configuration(self) -> dict[str, Any]:
-        url = f"https://{settings.auth0_domain}/.well-known/openid-configuration"
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.json()
 

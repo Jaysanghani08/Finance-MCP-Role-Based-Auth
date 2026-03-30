@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
-from random import uniform
 
 from app.adapters.macro_data import MacroDataAdapter
 from app.adapters.market_data import MarketDataAdapter
@@ -33,6 +33,10 @@ class MCPService:
             macro_adapter=MacroDataAdapter(),
             mf_adapter=MutualFundAdapter(),
         )
+
+    @staticmethod
+    def _seed(text: str) -> int:
+        return int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], 16)
 
     def capability_discovery(self, auth: AuthContext) -> dict:
         tools = [
@@ -76,13 +80,25 @@ class MCPService:
         )
 
     async def _tool_get_stock_quote(self, _auth: AuthContext, _holdings: list[Holding], payload: dict[str, Any]) -> ToolResponse:
-        quote, citations = await self.risk_engine.market.get_quote(payload["ticker"])
-        return ToolResponse(data=quote, citations=citations)
+        ticker = payload["ticker"].upper()
+        cache_key = f"quote:{ticker}"
+        cached = self.cache.get(cache_key)
+        if cached:
+            return ToolResponse(**cached)
+        quote, citations = await self.risk_engine.market.get_quote(ticker)
+        response = ToolResponse(data=quote, citations=citations)
+        self.cache.set(cache_key, response.model_dump(), ttl_seconds=60)
+        return response
 
     async def _tool_get_price_history(self, _auth: AuthContext, _holdings: list[Holding], payload: dict[str, Any]) -> ToolResponse:
         days = int(payload.get("days", 30))
-        rows, citations = await self.risk_engine.market.get_price_history(payload["ticker"], days=days)
-        return ToolResponse(data={"ticker": payload["ticker"].upper(), "rows": rows}, citations=citations)
+        limit = int(payload.get("limit", 30))
+        cursor = payload.get("cursor")
+        page, citations = await self.risk_engine.market.get_price_history(payload["ticker"], days=days, limit=limit, cursor=cursor)
+        return ToolResponse(
+            data={"ticker": payload["ticker"].upper(), "items": page["items"], "page_info": page["page_info"]},
+            citations=citations,
+        )
 
     async def _tool_get_index_data(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
         overview, citations = await self.risk_engine.market.get_market_overview()
@@ -94,32 +110,44 @@ class MCPService:
 
     async def _tool_get_shareholding_pattern(self, _auth: AuthContext, _holdings: list[Holding], payload: dict[str, Any]) -> ToolResponse:
         ticker = payload["ticker"].upper()
+        seed = self._seed(ticker)
+        def pct(base: int, spread: int, idx: int) -> float:
+            value = base + ((seed // (idx + 1)) % spread)
+            return round(float(value), 2)
         data = {
             "ticker": ticker,
             "quarters": [
-                {"quarter": "Q1", "promoter": round(uniform(45, 55), 2), "fii": round(uniform(18, 25), 2), "dii": round(uniform(8, 15), 2), "retail": round(uniform(10, 20), 2)},
-                {"quarter": "Q2", "promoter": round(uniform(45, 55), 2), "fii": round(uniform(18, 25), 2), "dii": round(uniform(8, 15), 2), "retail": round(uniform(10, 20), 2)},
-                {"quarter": "Q3", "promoter": round(uniform(45, 55), 2), "fii": round(uniform(18, 25), 2), "dii": round(uniform(8, 15), 2), "retail": round(uniform(10, 20), 2)},
+                {"quarter": "Q1", "promoter": pct(45, 10, 1), "fii": pct(18, 8, 2), "dii": pct(8, 8, 3), "retail": pct(10, 11, 4)},
+                {"quarter": "Q2", "promoter": pct(45, 10, 5), "fii": pct(18, 8, 6), "dii": pct(8, 8, 7), "retail": pct(10, 11, 8)},
+                {"quarter": "Q3", "promoter": pct(45, 10, 9), "fii": pct(18, 8, 10), "dii": pct(8, 8, 11), "retail": pct(10, 11, 12)},
             ],
         }
         return ToolResponse(
             data=data,
-            citations=[{"source": "Shareholding model (demo dataset)", "reference": ticker}],
+            citations=[{"source": "Deterministic shareholding model", "reference": ticker}],
         )
 
     async def _tool_get_company_news(self, _auth: AuthContext, _holdings: list[Holding], payload: dict[str, Any]) -> ToolResponse:
         ticker = payload["ticker"].upper()
-        cache_key = f"news:{ticker}"
+        days = int(payload.get("days", 7))
+        limit = int(payload.get("limit", 10))
+        cursor = payload.get("cursor")
+        cache_key = f"news:{ticker}:{days}:{limit}:{cursor or '0'}"
         cached = self.cache.get(cache_key)
         if cached:
             return ToolResponse(**cached)
         if not self.upstream_quota.try_consume("newsapi_daily"):
             return ToolResponse(
-                data={"ticker": ticker, "articles": [], "degraded": "newsapi_quota_exceeded"},
+                data={
+                    "ticker": ticker,
+                    "items": [],
+                    "page_info": {"limit": limit, "next_cursor": None, "total_items": 0, "days_window": days},
+                    "degraded": "newsapi_quota_exceeded",
+                },
                 citations=[{"source": "Quota manager", "reference": "newsapi_daily_exhausted"}],
             )
-        articles, citations = await self.risk_engine.news.get_company_news(ticker)
-        response = ToolResponse(data={"ticker": ticker, "articles": articles}, citations=citations)
+        page, citations = await self.risk_engine.news.get_company_news(ticker, days=days, limit=limit, cursor=cursor)
+        response = ToolResponse(data={"ticker": ticker, "items": page["items"], "page_info": page["page_info"]}, citations=citations)
         self.cache.set(cache_key, response.model_dump(), ttl_seconds=1800)
         return response
 

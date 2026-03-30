@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
-from random import uniform
+from datetime import timedelta
 
 import httpx
 
@@ -11,6 +12,25 @@ class MarketDataAdapter:
     Market adapter with best-effort yfinance endpoint and deterministic fallback.
     """
 
+    @staticmethod
+    def _seed(text: str) -> int:
+        return int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], 16)
+
+    @classmethod
+    def _deterministic_quote(cls, symbol: str) -> dict:
+        seed = cls._seed(symbol)
+        ltp = round(100 + (seed % 240000) / 100.0, 2)
+        change_raw = ((seed // 13) % 700) / 100.0
+        change_pct = round(change_raw - 3.5, 2)
+        volume = 100000 + (seed % 4900000)
+        return {
+            "ticker": symbol,
+            "ltp": ltp,
+            "change_pct": change_pct,
+            "volume": volume,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     async def get_quote(self, ticker: str) -> tuple[dict, list[dict]]:
         symbol = ticker.upper().replace(".NS", "")
         sources: list[dict] = []
@@ -19,7 +39,10 @@ class MarketDataAdapter:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
-                result = resp.json()["quoteResponse"]["result"][0]
+                results = resp.json().get("quoteResponse", {}).get("result", [])
+                if not results:
+                    raise ValueError("No quote rows returned from upstream")
+                result = results[0]
             data = {
                 "ticker": symbol,
                 "ltp": float(result.get("regularMarketPrice") or 0),
@@ -36,17 +59,10 @@ class MarketDataAdapter:
             )
             return data, sources
         except Exception:
-            ltp = round(uniform(120.0, 3200.0), 2)
-            data = {
-                "ticker": symbol,
-                "ltp": ltp,
-                "change_pct": round(uniform(-3.5, 3.5), 2),
-                "volume": int(uniform(100000, 5000000)),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+            data = self._deterministic_quote(symbol)
             sources.append(
                 {
-                    "source": "Mock market feed (fallback)",
+                    "source": "Deterministic market fallback",
                     "reference": f"{symbol}",
                     "as_of": data["timestamp"],
                 }
@@ -54,40 +70,55 @@ class MarketDataAdapter:
             return data, sources
 
     async def get_market_overview(self) -> tuple[dict, list[dict]]:
-        nifty, _ = await self.get_quote("^NSEI")
-        sensex, _ = await self.get_quote("^BSESN")
+        nifty, nse_citation = await self.get_quote("^NSEI")
+        sensex, bse_citation = await self.get_quote("^BSESN")
         overview = {
             "nifty50": {"value": nifty["ltp"], "change_pct": nifty["change_pct"]},
             "sensex": {"value": sensex["ltp"], "change_pct": sensex["change_pct"]},
         }
-        citations = [
-            {"source": "yfinance", "reference": "^NSEI/.NS", "as_of": nifty["timestamp"]},
-            {"source": "yfinance", "reference": "^BSESN/.NS", "as_of": sensex["timestamp"]},
-        ]
+        citations = nse_citation + bse_citation
         return overview, citations
 
-    async def get_price_history(self, ticker: str, days: int = 30) -> tuple[list[dict], list[dict]]:
+    async def get_price_history(
+        self,
+        ticker: str,
+        days: int = 30,
+        limit: int = 30,
+        cursor: str | None = None,
+    ) -> tuple[dict, list[dict]]:
         now = datetime.now(timezone.utc)
-        base = round(uniform(200, 3000), 2)
-        rows = []
-        for idx in range(max(1, min(days, 365))):
-            close = round(base + uniform(-25, 25), 2)
-            rows.append(
+        symbol = ticker.upper().replace(".NS", "")
+        seed = self._seed(symbol)
+        total_days = max(1, min(days, 365))
+        page_limit = max(1, min(limit, 100))
+        start = int(cursor or "0")
+
+        full_rows = []
+        base = 100 + (seed % 240000) / 100.0
+        for idx in range(total_days):
+            day_seed = (seed + idx * 7919) % 1000003
+            drift = ((day_seed % 2400) / 100.0) - 12.0
+            close = round(max(base + drift, 1.0), 2)
+            date_value = (now - timedelta(days=idx)).date().isoformat()
+            full_rows.append(
                 {
-                    "date": (now.date()).isoformat(),
-                    "open": round(close - uniform(0, 8), 2),
-                    "high": round(close + uniform(0, 10), 2),
-                    "low": round(close - uniform(0, 10), 2),
+                    "date": date_value,
+                    "open": round(max(close - ((day_seed % 400) / 100.0), 1.0), 2),
+                    "high": round(close + ((day_seed % 500) / 100.0), 2),
+                    "low": round(max(close - ((day_seed % 500) / 100.0), 1.0), 2),
                     "close": close,
-                    "volume": int(uniform(100000, 2500000)),
+                    "volume": 100000 + (day_seed % 2400000),
                 }
             )
+        rows = full_rows[start : start + page_limit]
+        next_cursor = str(start + page_limit) if start + page_limit < len(full_rows) else None
+
         return (
-            rows,
+            {"items": rows, "page_info": {"limit": page_limit, "next_cursor": next_cursor, "total_items": len(full_rows)}},
             [
                 {
-                    "source": "Mock OHLCV feed (fallback)",
-                    "reference": ticker.upper(),
+                    "source": "Deterministic OHLCV fallback",
+                    "reference": symbol,
                     "as_of": now.isoformat(),
                 }
             ],

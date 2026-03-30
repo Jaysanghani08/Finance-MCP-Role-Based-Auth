@@ -99,7 +99,12 @@ TOOL_CONTRACTS: dict[str, MCPToolContract] = {
         allowed_tiers={TIER_FREE, TIER_PREMIUM, TIER_ANALYST},
         input_schema={
             "type": "object",
-            "properties": {"ticker": {"type": "string"}, "days": {"type": "number"}},
+            "properties": {
+                "ticker": {"type": "string"},
+                "days": {"type": "number"},
+                "limit": {"type": "number"},
+                "cursor": {"type": "string"},
+            },
             "required": ["ticker"],
         },
         output_schema=COMMON_TOOL_OUTPUT,
@@ -133,7 +138,16 @@ TOOL_CONTRACTS: dict[str, MCPToolContract] = {
         description="Latest company news for a stock.",
         required_scopes={"news:read"},
         allowed_tiers={TIER_FREE, TIER_PREMIUM, TIER_ANALYST},
-        input_schema={"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]},
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "limit": {"type": "number"},
+                "cursor": {"type": "string"},
+                "days": {"type": "number"},
+            },
+            "required": ["ticker"],
+        },
         output_schema=COMMON_TOOL_OUTPUT,
     ),
     "get_news_sentiment": MCPToolContract(

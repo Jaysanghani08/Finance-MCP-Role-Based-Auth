@@ -1,118 +1,65 @@
-# PS2 MCP Server (Python + Auth0)
+# PS2 MCP Server (stdio + Auth0)
 
-Production-style MCP server implementation for **AI League #3 - Use Case 2 (Portfolio Risk & Alert Monitor)**.
+Production-style MCP server for AI League #3 Use Case 2 (Portfolio Risk & Alert Monitor).
 
-## What this implements
+## What this repo provides
 
-- MCP primitives for PS2:
-  - Tools, resources, prompts, and tier-aware capability discovery.
-- OAuth resource-server behavior with Auth0:
-  - JWT validation (signature, `exp`, `aud`, `iss`)
-  - scope and tier enforcement
-  - `401` with `WWW-Authenticate` and resource metadata
-  - `403` with `insufficient_scope`
-- PS2 portfolio/risk system:
-  - user portfolio persistence
-  - alerts + risk score resources
-  - subscriptions for alert/risk updates
-  - cross-source `portfolio_risk_report` and `what_if_analysis`
-- Reliability:
-  - per-tier rate limits (`30/150/500` per hour)
-  - TTL caching by data type (`60s`, `30m`, etc.)
-  - upstream-aware quota manager + graceful degradation
-  - audit logging for each operation
+- MCP tools/resources/prompts for PS2.
+- Tier-aware authorization (`free`, `premium`, `analyst`) based on Auth0 JWT claims.
+- Auth0-backed login using Device Authorization flow in the stdio server.
+- Local persistence, caching, rate limiting, and audit logging.
 
-## Tech stack
+## Prerequisites
 
-- Python 3.11
-- FastAPI
-- PyJWT + Auth0 JWKS validation
-- JSON-backed local store (demo-friendly)
+- Python 3.11+
+- Auth0 tenant + API + public client
+- Auth0 access token includes custom claim `https://ps2.example.com/tier`
 
-## Quick start (local)
+## Setup
 
-1. Create env file:
-   - `cp .env.example .env`
-2. Fill Auth0 settings in `.env`.
-3. Install dependencies:
-   - `pip install -e .`
-4. Run:
-   - `uvicorn app.main:app --reload`
-5. Verify:
-   - `GET /health`
-   - `GET /.well-known/oauth-protected-resource`
+1. Copy env:
+  - `cp .env.example .env`
+2. Fill in:
+  - `AUTH0_DOMAIN`
+  - `AUTH0_AUDIENCE`
+  - `AUTH0_ISSUER`
+  - `AUTH0_CLIENT_ID`
+3. Install:
+  - `python3 -m venv .venv`
+  - `source .venv/bin/activate`
+  - `pip install -e .`
 
-## Quick start (Docker)
+## Cursor setup
 
-1. `cp .env.example .env`
-2. Set Auth0 values in `.env`
-3. `docker compose up --build`
+Configure `~/.cursor/mcp.json`:
 
-## Auth0 setup notes
+```json
+{
+  "mcpServers": {
+    "ps2-mcp": {
+      "command": "/ABSOLUTE/PATH/TO/Week-3/.venv/bin/ps2-mcp-stdio",
+      "env": {
+        "AUTH0_DOMAIN": "your-tenant.us.auth0.com",
+        "AUTH0_AUDIENCE": "https://ps2-mcp-api",
+        "AUTH0_ISSUER": "https://your-tenant.us.auth0.com/",
+        "AUTH0_CLIENT_ID": "your_auth0_client_id"
+      }
+    }
+  }
+}
+```
 
-- Create an Auth0 API with identifier matching `AUTH0_AUDIENCE`.
-- Issue access tokens with these scopes (as needed): `portfolio:read`, `portfolio:write`, `market:read`, `mf:read`, `news:read`, `macro:read`, `macro:historical`, `research:generate`.
-- Include custom claim `https://ps2.example.com/tier` with one of:
-  - `free`
-  - `premium`
-  - `analyst`
+Restart MCP servers in Cursor. The server prints an Auth0 activation URL and code; complete login once prompted.
 
-## Core endpoints
+## Optional env
 
-- `GET /.well-known/oauth-protected-resource`
-- `GET /mcp/capabilities`
-- `GET /mcp/contracts`
-- `POST /mcp/tools/{tool_name}`
-- `POST /mcp/resources/read`
-- `POST /mcp/resources/subscribe`
-- `POST /mcp/resources/unsubscribe`
-- `GET /mcp/resources/events`
-- `POST /mcp/prompts/invoke`
+- `MCP_AUTH0_SCOPES` (space-separated scopes override for device flow request).
 
 ## Key files
 
-- Server entry: `app/main.py`
-- Contracts and tier matrix: `app/core/contracts.py`
-- Auth enforcement: `app/auth/`
-- Tool orchestration: `app/services/mcp_service.py`
-- Risk engine: `app/services/risk_engine.py`
-- Store/subscriptions/rate-limit/cache/audit: `app/services/`
-- Detailed docs:
-  - `docs/architecture.md`
-  - `docs/technical_explanation.md`
-  - `docs/api_reference.md`
-  - `docs/schema_reference.md`
-  - `docs/scope_tier_matrix.md`
-  - `docs/demo_runbook.md`
+- `app/stdio_server.py` - MCP stdio transport and Auth0 device flow auth.
+- `app/core/contracts.py` - tool/resource/prompt scope+tier contracts.
+- `app/services/mcp_service.py` - business logic orchestration.
+- `docs/scope_tier_matrix.md` - tier matrix.
+- `docs/schema_reference.md` - schemas.
 
-## Architecture (high-level)
-
-```mermaid
-flowchart LR
-  Client[MCPClient] --> Auth0[Auth0AuthorizationServer]
-  Client -->|BearerToken| MCP[MCPServerPythonFastAPI]
-  MCP --> AuthLayer[JWTValidationAndScopeChecks]
-  AuthLayer --> ToolLayer[ToolsResourcesPrompts]
-  ToolLayer --> RiskEngine[PS2RiskEngine]
-  ToolLayer --> Store[PortfolioAlertsRiskStore]
-  ToolLayer --> CacheRate[TTLCacheAndTierRateLimiter]
-  RiskEngine --> Market[MarketAdapters]
-  RiskEngine --> News[NewsAdapters]
-  RiskEngine --> Macro[MacroAdapters]
-  RiskEngine --> MF[MutualFundAdapters]
-  ToolLayer --> Subs[ResourceSubscriptionEvents]
-  ToolLayer --> Audit[AuditLog]
-```
-
-## Demo path (must-show boundary)
-
-1. Free token: add holdings + `get_portfolio_summary` succeeds.
-2. Free token: `portfolio_risk_report` returns `403 insufficient_scope`.
-3. Premium token: `portfolio_health_check` + `check_mf_overlap` succeed.
-4. Premium token: `what_if_analysis` returns `403`.
-5. Analyst token: full `portfolio_risk_report` and `what_if_analysis` succeed.
-6. Subscribe to `portfolio://{user_id}/alerts`, run health checks, then poll `/mcp/resources/events` to receive updates.
-
-## Disclaimer
-
-This system provides informational analytics and does not provide financial advice.

@@ -5,11 +5,11 @@ Canonical source of truth is `app/core/contracts.py`.
 ## Tool input requirements
 
 - `get_stock_quote`: `{ ticker: string }`
-- `get_price_history`: `{ ticker: string, days?: number }`
+- `get_price_history`: `{ ticker: string, days?: number, limit?: number, cursor?: string }`
 - `get_index_data`: `{}`
 - `get_top_gainers_losers`: `{}`
 - `get_shareholding_pattern`: `{ ticker: string }`
-- `get_company_news`: `{ ticker: string }`
+- `get_company_news`: `{ ticker: string, limit?: number, cursor?: string, days?: number }`
 - `get_news_sentiment`: `{ ticker: string, window_days?: number }`
 - `get_rbi_rates`: `{}`
 - `get_inflation_data`: `{}`
@@ -33,6 +33,14 @@ All tools/resources/prompts produce:
 - `data` (object)
 - `citations` (array of `{ source, reference, as_of? }`)
 - `disclaimer` (string)
+
+For paginated tools (`get_company_news`, `get_price_history`), `data` includes:
+
+- `items` (array)
+- `page_info`:
+  - `limit` (number)
+  - `next_cursor` (string or `null`)
+  - `total_items` (number)
 
 ## Scope requirements
 
