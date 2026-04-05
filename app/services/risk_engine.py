@@ -198,39 +198,178 @@ class RiskEngine:
 
         confirmations: list[dict] = []
         contradictions: list[dict] = []
+
+        overlap_tickers: set[str] = set()
+        for o in overlap.get("overlaps", []):
+            overlap_tickers.update(o.get("overlap_tickers", []))
+
+        shifted_tickers = [s["ticker"] for s in sentiment["shifts"] if s["shift_detected"]]
+        negative_shifts = [s for s in sentiment["shifts"] if s["shift_detected"] and s["delta"] < 0]
+        positive_shifts = [s for s in sentiment["shifts"] if s["shift_detected"] and s["delta"] > 0]
+
+        fx_change = macro["macro_snapshot"].get("usd_inr_change_30d_pct", 0)
+        repo_rate = macro["macro_snapshot"].get("repo_rate", 0)
+        it_exposure = summary["allocation_by_sector_pct"].get("IT", 0)
+        banking_exposure = summary["allocation_by_sector_pct"].get("BANKING", 0)
+
+        high_sensitivity = [
+            e for e in macro["holding_exposure"] if e["sensitivity_score"] >= 7
+        ]
+
         if conc["sector_concentration_breaches"] and overlap["overlaps"]:
-            confirmations.append(
-                {
-                    "finding": "Sector concentration risk is reinforced by MF overlap.",
-                    "confirmed_by_sources": ["NSE/yfinance derived allocation", "MFapi overlap"],
-                    "evidence": {
-                        "sector_breaches": conc["sector_concentration_breaches"],
-                        "overlap_count": len(overlap["overlaps"]),
-                    },
-                }
-            )
-        if sentiment["shifts"] and macro["macro_snapshot"]["usd_inr_change_30d_pct"] < 0:
-            confirmations.append(
-                {
-                    "finding": "Negative forex trend aligns with sentiment pressure.",
-                    "confirmed_by_sources": ["RBI macro snapshot", "News sentiment"],
-                    "evidence": {
-                        "usd_inr_change_30d_pct": macro["macro_snapshot"]["usd_inr_change_30d_pct"],
-                        "shifted_tickers": [s["ticker"] for s in sentiment["shifts"] if s["shift_detected"]],
-                    },
-                }
-            )
-        if not conc["stock_concentration_breaches"] and sentiment["shifts"]:
-            contradictions.append(
-                {
-                    "finding": "Sentiment weakness appears without stock concentration stress.",
-                    "contradicted_by_sources": ["Portfolio concentration analysis", "News sentiment"],
-                    "evidence": {
-                        "stock_breaches": conc["stock_concentration_breaches"],
-                        "sentiment_shifts": [s for s in sentiment["shifts"] if s["shift_detected"]],
-                    },
-                }
-            )
+            confirmations.append({
+                "finding": (
+                    "Sector concentration risk is reinforced by mutual fund overlap — "
+                    "your portfolio duplicates exposure that popular large-cap MF schemes also hold."
+                ),
+                "confirmed_by_sources": ["NSE/yfinance (derived allocation)", "MFapi.in (popular fund holdings)"],
+                "evidence": {
+                    "sector_breaches": conc["sector_concentration_breaches"],
+                    "overlap_count": len(overlap["overlaps"]),
+                    "overlapping_tickers": sorted(overlap_tickers),
+                },
+            })
+
+        if it_exposure > 15 and fx_change < -1:
+            confirmations.append({
+                "finding": (
+                    f"IT sector is {it_exposure}% of portfolio while INR strengthened "
+                    f"{abs(fx_change)}% over 30 days — this historically pressures IT "
+                    "export margins and rupee-denominated revenue."
+                ),
+                "confirmed_by_sources": ["NSE/yfinance (IT allocation derived)", "RBI DBIE (USD-INR movement)"],
+                "evidence": {"it_allocation_pct": it_exposure, "usd_inr_change_30d_pct": fx_change},
+            })
+
+        if banking_exposure > 15 and repo_rate >= 6.0:
+            confirmations.append({
+                "finding": (
+                    f"Banking sector is {banking_exposure}% of portfolio with repo rate at "
+                    f"{repo_rate}% — elevated rates squeeze net interest margins for "
+                    "banks while benefiting deposit income; monitor for rate-cut signals."
+                ),
+                "confirmed_by_sources": ["NSE/yfinance (banking allocation)", "RBI DBIE (repo rate)"],
+                "evidence": {"banking_allocation_pct": banking_exposure, "repo_rate_pct": repo_rate},
+            })
+
+        if negative_shifts and fx_change < -1:
+            confirmations.append({
+                "finding": (
+                    "Negative forex trend aligns with deteriorating news sentiment — "
+                    "macro headwinds may be driving company-level pessimism."
+                ),
+                "confirmed_by_sources": ["RBI DBIE (forex movement)", "NewsAPI (sentiment analysis)"],
+                "evidence": {
+                    "usd_inr_change_30d_pct": fx_change,
+                    "negatively_shifted_tickers": [s["ticker"] for s in negative_shifts],
+                    "avg_sentiment_delta": round(
+                        sum(s["delta"] for s in negative_shifts) / len(negative_shifts), 2
+                    ),
+                },
+            })
+
+        if len(high_sensitivity) >= 2:
+            confirmations.append({
+                "finding": (
+                    f"{len(high_sensitivity)} holdings have elevated macro sensitivity "
+                    f"(score ≥ 7) — portfolio is broadly vulnerable to RBI policy "
+                    "changes, inflation shifts, and forex movements."
+                ),
+                "confirmed_by_sources": ["Sector sensitivity model", "RBI DBIE (current macro conditions)"],
+                "evidence": {
+                    "high_sensitivity_holdings": [
+                        {"ticker": e["ticker"], "score": e["sensitivity_score"]}
+                        for e in high_sensitivity
+                    ],
+                },
+            })
+
+        doubly_exposed = sorted(overlap_tickers.intersection(shifted_tickers))
+        if doubly_exposed:
+            confirmations.append({
+                "finding": (
+                    f"Stocks {', '.join(doubly_exposed)} appear in both MF overlap and "
+                    "sentiment-shift lists — popular names face compounding risk from "
+                    "broad market selling and sentiment deterioration."
+                ),
+                "confirmed_by_sources": ["MFapi.in (fund overlap)", "NewsAPI (sentiment analysis)"],
+                "evidence": {"doubly_exposed_tickers": doubly_exposed},
+            })
+
+        if not conc["stock_concentration_breaches"] and negative_shifts:
+            contradictions.append({
+                "finding": (
+                    "News sentiment has turned negative for some holdings, but no single "
+                    "stock breaches the 20% concentration threshold — the negative "
+                    "sentiment may be market-wide rather than portfolio-specific."
+                ),
+                "contradicted_by_sources": [
+                    "Portfolio concentration analysis (NSE/yfinance)",
+                    "NewsAPI (sentiment analysis)",
+                ],
+                "evidence": {
+                    "stock_breaches_count": 0,
+                    "negative_sentiment_tickers": [s["ticker"] for s in negative_shifts],
+                },
+            })
+
+        if repo_rate <= 6.5 and fx_change >= 0 and negative_shifts and not positive_shifts:
+            contradictions.append({
+                "finding": (
+                    "Macro environment appears stable (repo rate steady, INR stable or "
+                    "appreciating) but sentiment is deteriorating — pessimism may be "
+                    "event-driven and potentially transient rather than macro-fundamental."
+                ),
+                "contradicted_by_sources": ["RBI DBIE (macro stability)", "NewsAPI (sentiment analysis)"],
+                "evidence": {
+                    "repo_rate": repo_rate,
+                    "usd_inr_change_30d_pct": fx_change,
+                    "negative_sentiment_count": len(negative_shifts),
+                },
+            })
+
+        if conc["sector_concentration_breaches"] and not overlap["overlaps"]:
+            contradictions.append({
+                "finding": (
+                    "Portfolio has sector concentration risk but holdings do not overlap "
+                    "with popular large-cap MF schemes — your sector bet is differentiated "
+                    "from mainstream institutional positioning."
+                ),
+                "contradicted_by_sources": [
+                    "Portfolio concentration analysis",
+                    "MFapi.in (no fund overlap detected)",
+                ],
+                "evidence": {
+                    "concentrated_sectors": [
+                        b["sector"] for b in conc["sector_concentration_breaches"]
+                    ],
+                    "mf_overlaps_found": 0,
+                },
+            })
+
+        low_sensitivity_all = all(
+            e["sensitivity_score"] < 5 for e in macro["holding_exposure"]
+        ) if macro["holding_exposure"] else True
+        if conc["stock_concentration_breaches"] and low_sensitivity_all:
+            contradictions.append({
+                "finding": (
+                    "Portfolio has stock concentration risk but low macro sensitivity "
+                    "across all holdings — risk is idiosyncratic (company-specific) "
+                    "rather than systemic (macro-driven)."
+                ),
+                "contradicted_by_sources": [
+                    "Portfolio concentration analysis",
+                    "Sector sensitivity model",
+                ],
+                "evidence": {
+                    "concentrated_stocks": [
+                        b["ticker"] for b in conc["stock_concentration_breaches"]
+                    ],
+                    "max_macro_sensitivity": max(
+                        (e["sensitivity_score"] for e in macro["holding_exposure"]), default=0
+                    ),
+                },
+            })
 
         report = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -239,20 +378,100 @@ class RiskEngine:
             "mf_overlap": overlap,
             "macro_sensitivity": macro,
             "sentiment_shift": sentiment,
-            "confirmations": confirmations,
-            "contradictions": contradictions,
+            "cross_source_analysis": {
+                "total_sources_consulted": 5,
+                "sources": [
+                    "NSE/yfinance (market data and derived allocation)",
+                    "MFapi.in (mutual fund overlap)",
+                    "RBI DBIE (macro indicators)",
+                    "NewsAPI (sentiment analysis)",
+                    "Sector sensitivity model (derived)",
+                ],
+                "confirmations": confirmations,
+                "contradictions": contradictions,
+                "signals_summary": {
+                    "confirming_signals": len(confirmations),
+                    "contradicting_signals": len(contradictions),
+                    "net_risk_direction": (
+                        "elevated" if len(confirmations) > len(contradictions) else "mixed"
+                    ),
+                },
+            },
         }
         all_alerts = conc_alerts + overlap_alerts + macro_alerts + sentiment_alerts
         return report, c1 + c2 + c3 + c4 + c5, all_alerts
 
-    async def what_if_rate_change(self, holdings: list[Holding], rate_change_bps: float) -> tuple[dict, list[dict]]:
-        hist, citations = await self.macro.get_historical_rate_reaction()
+    async def what_if_rate_change(
+        self, holdings: list[Holding], rate_change_bps: float
+    ) -> tuple[dict, list[dict]]:
+        hist, hist_citations = await self.macro.get_historical_rate_reaction()
+        macro_snapshot, macro_citations = await self.macro.get_macro_snapshot()
+        summary, summary_citations = await self.portfolio_summary(holdings)
+
+        total_value = summary["total_value"] or 1.0
         impact = []
+        weighted_impact_sum = 0.0
         key = str(int(rate_change_bps))
-        for h in holdings:
-            sector = h.sector.upper()
+
+        for pos in summary["positions"]:
+            sector = pos["sector"].upper()
             sector_map = hist.get(sector, {})
             pct = sector_map.get(key, 0.0)
-            impact.append({"ticker": h.ticker, "sector": h.sector, "estimated_price_impact_pct": pct})
-        return {"rate_change_bps": rate_change_bps, "holding_impacts": impact}, citations
+            value_change = round(pos["market_value"] * pct / 100.0, 2)
+            weight = pos["market_value"] / total_value
+            weighted_impact_sum += weight * pct
+            impact.append({
+                "ticker": pos["ticker"],
+                "sector": pos["sector"],
+                "current_value": pos["market_value"],
+                "estimated_price_impact_pct": pct,
+                "estimated_value_change": value_change,
+                "portfolio_weight_pct": round(weight * 100, 2),
+            })
+
+        projected_rate = macro_snapshot["repo_rate"] + (rate_change_bps / 100.0)
+        direction = "cut" if rate_change_bps < 0 else "hike"
+        total_impact_pct = round(weighted_impact_sum, 2)
+        total_value_change = round(total_value * total_impact_pct / 100.0, 2)
+
+        beneficiaries = sorted(
+            [i for i in impact if i["estimated_price_impact_pct"] > 0],
+            key=lambda x: x["estimated_price_impact_pct"], reverse=True,
+        )
+        adversely_affected = sorted(
+            [i for i in impact if i["estimated_price_impact_pct"] < 0],
+            key=lambda x: x["estimated_price_impact_pct"],
+        )
+
+        return {
+            "scenario": {
+                "rate_change_bps": rate_change_bps,
+                "direction": direction,
+                "current_repo_rate": macro_snapshot["repo_rate"],
+                "projected_repo_rate": round(projected_rate, 2),
+            },
+            "portfolio_impact": {
+                "current_total_value": total_value,
+                "weighted_impact_pct": total_impact_pct,
+                "estimated_total_value_change": total_value_change,
+            },
+            "holding_impacts": impact,
+            "analysis": {
+                "beneficiaries": [
+                    {"ticker": b["ticker"], "impact_pct": b["estimated_price_impact_pct"]}
+                    for b in beneficiaries[:3]
+                ],
+                "adversely_affected": [
+                    {"ticker": a["ticker"], "impact_pct": a["estimated_price_impact_pct"]}
+                    for a in adversely_affected[:3]
+                ],
+                "narrative": (
+                    f"A {abs(int(rate_change_bps))}bps rate {direction} (repo "
+                    f"{macro_snapshot['repo_rate']}% \u2192 {round(projected_rate, 2)}%) "
+                    f"would have a net {total_impact_pct}% impact on portfolio value "
+                    f"(\u2248 \u20b9{total_value_change:,.0f} change). "
+                    f"Based on historical sector reactions to past RBI rate {direction}s."
+                ),
+            },
+        }, hist_citations + macro_citations + summary_citations
 

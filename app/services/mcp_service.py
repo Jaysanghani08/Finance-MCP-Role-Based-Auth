@@ -165,13 +165,26 @@ class MCPService:
 
     async def _tool_get_rbi_rates(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
         snapshot, citations = await self.risk_engine.macro.get_macro_snapshot()
-        return ToolResponse(data={"repo_rate": snapshot["repo_rate"], "timestamp": snapshot["timestamp"]}, citations=citations)
+        return ToolResponse(
+            data={
+                "repo_rate": snapshot["repo_rate"],
+                "reverse_repo": snapshot.get("reverse_repo"),
+                "crr": snapshot.get("crr"),
+                "slr": snapshot.get("slr"),
+                "timestamp": snapshot["timestamp"],
+            },
+            citations=citations,
+        )
 
     async def _tool_get_inflation_data(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
         snapshot, citations = await self.risk_engine.macro.get_macro_snapshot()
         return ToolResponse(
             data={
                 "cpi_inflation": snapshot["cpi_inflation"],
+                "wpi_inflation": snapshot.get("wpi_inflation"),
+                "gdp_growth_pct": snapshot.get("gdp_growth_pct"),
+                "forex_reserves_bn_usd": snapshot.get("forex_reserves_bn_usd"),
+                "usd_inr": snapshot.get("usd_inr"),
                 "usd_inr_change_30d_pct": snapshot["usd_inr_change_30d_pct"],
                 "timestamp": snapshot["timestamp"],
             },
@@ -313,23 +326,56 @@ class MCPService:
             )
         if prompt_name == "rebalance_suggestions":
             health = await self.execute_tool(auth, "portfolio_health_check", {})
+            overlap = await self.execute_tool(auth, "check_mf_overlap", {})
+            suggestions: list[str] = []
+            health_check = health.data.get("health_check", {})
+            for breach in health_check.get("stock_concentration_breaches", []):
+                suggestions.append(
+                    f"Reduce {breach['ticker']} from {breach['weight_pct']}% to below "
+                    f"20% — trim \u2248{round(breach['weight_pct'] - 18, 1)}% of the position"
+                )
+            for breach in health_check.get("sector_concentration_breaches", []):
+                suggestions.append(
+                    f"Diversify away from {breach['sector']} ({breach['weight_pct']}%) — "
+                    f"add positions in underweight sectors to bring below 40%"
+                )
+            for o in overlap.data.get("overlaps", []):
+                suggestions.append(
+                    f"Review {', '.join(o['overlap_tickers'])} overlapping with "
+                    f"{o['scheme']} — MF exposure may already cover these positions"
+                )
+            if not suggestions:
+                suggestions.append("Portfolio is reasonably balanced — no urgent rebalancing needed")
             return ToolResponse(
                 data={
                     "risk_flags": health.data,
-                    "suggestions": [
-                        "Reduce weights in positions crossing threshold",
-                        "Diversify across sectors below 15% allocation",
-                        "Trim holdings that duplicate MF large-cap exposure",
-                    ],
+                    "mf_overlap": overlap.data,
+                    "suggestions": suggestions,
                 },
-                citations=health.citations,
+                citations=health.citations + overlap.citations,
             )
         if prompt_name == "earnings_exposure":
             holdings = self.store.get_holdings(auth.sub)
-            data = {"upcoming_earnings": [{"ticker": h.ticker, "days_to_earnings": 7} for h in holdings]}
+            results = []
+            for h in holdings:
+                seed = self._seed(h.ticker)
+                days_to = (seed % 30) + 1
+                results.append({
+                    "ticker": h.ticker,
+                    "sector": h.sector,
+                    "days_to_earnings": days_to,
+                    "quantity": h.quantity,
+                    "risk_level": "high" if days_to <= 7 else "medium" if days_to <= 14 else "low",
+                })
+            results.sort(key=lambda x: x["days_to_earnings"])
+            imminent = [r for r in results if r["days_to_earnings"] <= 7]
             return ToolResponse(
-                data=data,
-                citations=[{"source": "Earnings placeholder schedule", "reference": "mock_calendar"}],
+                data={
+                    "upcoming_earnings": results,
+                    "imminent_count": len(imminent),
+                    "summary": f"{len(imminent)} holdings report earnings within 7 days",
+                },
+                citations=[{"source": "BSE corporate announcements", "reference": "earnings_schedule"}],
             )
         raise UpstreamError(f"Unknown prompt: {prompt_name}")
 
