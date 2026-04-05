@@ -1,5 +1,7 @@
 # PS2 MCP Server — Portfolio Risk & Alert Monitor
 
+### Only For Educational Purposes
+
 Production-grade MCP server for AI League #3 Use Case 2 (Portfolio Risk & Alert Monitor).
 
 ## What this repo provides
@@ -39,27 +41,27 @@ See `docs/architecture.md` for the full architecture diagram and component descr
 1. Go to **Applications > Applications** in your Auth0 dashboard
 2. Click **Create Application** > choose **Regular Web Applications**
 3. In **Settings**:
-   - Copy the **Client ID** and **Client Secret**
-   - Under **Allowed Callback URLs** add: `http://localhost:8000/auth/callback`
+  - Copy the **Client ID** and **Client Secret**
+  - Under **Allowed Callback URLs** add: `http://localhost:8000/auth/callback`
 4. Save
 5. Go to **Applications > APIs**, find your API, and copy the **Identifier** (audience)
 
 ## Setup
 
 1. Copy env:
-   ```bash
+  ```bash
    cp .env.example .env
-   ```
+  ```
 2. Fill in `.env` (see `.env.example` for sign-up links):
-   - `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_ISSUER`
-   - `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`
-   - Optional: `NEWS_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `DATA_GOV_API_KEY`
+  - `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_ISSUER`
+  - `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`
+  - Optional: `NEWS_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `DATA_GOV_API_KEY`
 3. Install:
-   ```bash
+  ```bash
    python3 -m venv .venv
    source .venv/bin/activate
    pip install -e ".[dev]"
-   ```
+  ```
 
 ## Running the Server
 
@@ -119,21 +121,23 @@ pytest tests/ -v
 
 ## Key Files
 
-| File | Description |
-|------|-------------|
-| `app/ps2_fastmcp.py` | FastMCP HTTP server: Auth0 OIDC proxy, tools, resources, prompts, health check, RFC 9728 |
-| `app/core/contracts.py` | Tool/resource/prompt scope + tier contracts |
-| `app/services/mcp_service.py` | Business logic orchestration |
-| `app/services/risk_engine.py` | Cross-source analysis engine with confirmation/contradiction patterns |
-| `app/auth/access_control.py` | Tier + scope enforcement |
-| `app/adapters/` | Upstream API clients (Yahoo Finance, NewsAPI, MFapi.in, RBI) |
-| `docs/architecture.md` | Architecture diagram |
-| `docs/technical_explanation.md` | Technical design decisions |
-| `docs/schema_reference.md` | Complete API reference (tools, resources, prompts, scopes) |
-| `docs/scope_tier_matrix.md` | Tier → scope matrix |
-| `Dockerfile` | Container image |
-| `docker-compose.yml` | One-command deployment |
-| `tests/` | Unit tests for contracts, risk engine, rate limiter |
+
+| File                            | Description                                                                              |
+| ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `app/ps2_fastmcp.py`            | FastMCP HTTP server: Auth0 OIDC proxy, tools, resources, prompts, health check, RFC 9728 |
+| `app/core/contracts.py`         | Tool/resource/prompt scope + tier contracts                                              |
+| `app/services/mcp_service.py`   | Business logic orchestration                                                             |
+| `app/services/risk_engine.py`   | Cross-source analysis engine with confirmation/contradiction patterns                    |
+| `app/auth/access_control.py`    | Tier + scope enforcement                                                                 |
+| `app/adapters/`                 | Upstream API clients (Yahoo Finance, NewsAPI, MFapi.in, RBI)                             |
+| `docs/architecture.md`          | Architecture diagram                                                                     |
+| `docs/technical_explanation.md` | Technical design decisions                                                               |
+| `docs/schema_reference.md`      | Complete API reference (tools, resources, prompts, scopes)                               |
+| `docs/scope_tier_matrix.md`     | Tier → scope matrix                                                                      |
+| `Dockerfile`                    | Container image                                                                          |
+| `docker-compose.yml`            | One-command deployment                                                                   |
+| `tests/`                        | Unit tests for contracts, risk engine, rate limiter                                      |
+
 
 ## Demo Scenarios
 
@@ -146,6 +150,7 @@ pytest tests/ -v
 ### Must-Show Cross-Source Moment
 
 `portfolio_risk_report` combines:
+
 - Current prices [NSE/yfinance]
 - Sector mapping [derived from holdings]
 - Macro indicators [RBI DBIE]
