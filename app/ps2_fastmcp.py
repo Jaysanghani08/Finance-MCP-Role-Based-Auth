@@ -30,6 +30,7 @@ from app.core.contracts import (
     TOOL_CONTRACTS,
 )
 import httpx
+from starlette.middleware import Middleware as ASGIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -441,15 +442,13 @@ class _WWWAuthMiddleware(BaseHTTPMiddleware):
         return response
 
 
-mcp.add_middleware(_WWWAuthMiddleware)
-
-
 def main() -> None:
     """Entry point: run the PS2 MCP server over HTTP."""
     mcp.run(
         transport="http",
         host=settings.host,
         port=settings.port,
+        middleware=[ASGIMiddleware(_WWWAuthMiddleware)],
     )
 
 
