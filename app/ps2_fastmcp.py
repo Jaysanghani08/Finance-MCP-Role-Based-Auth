@@ -30,8 +30,6 @@ from app.core.contracts import (
     TOOL_CONTRACTS,
 )
 import httpx
-from starlette.middleware import Middleware as ASGIMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -352,18 +350,18 @@ def create_app() -> FastMCP:
 
 mcp = create_app()
 
+# Yahoo often returns 429 for generic Python clients; browser-like UA reduces blocks.
+_YAHOO_HEALTH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
 
-# ── RFC 9728 Protected Resource Metadata ──────────────────────────────
 
-
-@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
-async def _protected_resource_metadata(request: Request) -> JSONResponse:
-    return JSONResponse({
-        "resource": f"http://localhost:{settings.port}",
-        "authorization_servers": [f"https://{settings.auth0_domain}"],
-        "scopes_supported": sorted(SCOPES),
-        "bearer_methods_supported": ["header"],
-    })
+def _health_exc_detail(exc: BaseException) -> str:
+    """httpx ReadTimeout often has an empty str(); repr() keeps JSON detail informative."""
+    return f"{type(exc).__name__}: {repr(exc)}"
 
 
 # ── Health-check endpoint ─────────────────────────────────────────────
@@ -373,19 +371,31 @@ async def _protected_resource_metadata(request: Request) -> JSONResponse:
 async def _health_endpoint(request: Request) -> JSONResponse:
     checks: dict = {}
     async with httpx.AsyncClient(timeout=5.0) as client:
-        for label, url in [
-            ("yahoo_finance", "https://query1.finance.yahoo.com/v7/finance/quote?symbols=RELIANCE.NS"),
-            ("mfapi", "https://api.mfapi.in/mf/120503"),
-            ("rbi_proxy", "https://api.allorigins.win/raw?url=https://www.rbi.org.in/"),
+        for label, url, extra in [
+            (
+                "yahoo_finance",
+                "https://query1.finance.yahoo.com/v7/finance/quote?symbols=RELIANCE.NS",
+                {"headers": _YAHOO_HEALTH_HEADERS},
+            ),
+            ("mfapi", "https://api.mfapi.in/mf/120503", {}),
+            (
+                "rbi_proxy",
+                "https://api.allorigins.win/raw?url=https://www.rbi.org.in/",
+                # Public CORS proxy can be slow or return 5xx; align with macro adapter patience.
+                {"timeout": 20.0},
+            ),
         ]:
             try:
-                r = await client.get(url)
-                checks[label] = {
+                r = await client.get(url, **extra)
+                entry: dict = {
                     "status": "ok" if r.status_code == 200 else "degraded",
                     "http_code": r.status_code,
                 }
+                if r.status_code != 200:
+                    entry["detail"] = f"HTTP {r.status_code}"
+                checks[label] = entry
             except Exception as exc:
-                checks[label] = {"status": "error", "detail": str(exc)}
+                checks[label] = {"status": "error", "detail": _health_exc_detail(exc)}
     if settings.news_api_key:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -398,7 +408,7 @@ async def _health_endpoint(request: Request) -> JSONResponse:
                     "http_code": r.status_code,
                 }
         except Exception as exc:
-            checks["newsapi"] = {"status": "error", "detail": str(exc)}
+            checks["newsapi"] = {"status": "error", "detail": _health_exc_detail(exc)}
     else:
         checks["newsapi"] = {"status": "not_configured"}
 
@@ -425,30 +435,12 @@ async def _health_endpoint(request: Request) -> JSONResponse:
     })
 
 
-# ── WWW-Authenticate middleware (RFC 9728 §3) ────────────────────────
-
-
-class _WWWAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        if response.status_code == 401:
-            meta_url = (
-                f"http://localhost:{settings.port}"
-                "/.well-known/oauth-protected-resource"
-            )
-            response.headers["WWW-Authenticate"] = (
-                f'Bearer resource_metadata="{meta_url}"'
-            )
-        return response
-
-
 def main() -> None:
     """Entry point: run the PS2 MCP server over HTTP."""
     mcp.run(
         transport="http",
         host=settings.host,
         port=settings.port,
-        middleware=[ASGIMiddleware(_WWWAuthMiddleware)],
     )
 
 

@@ -102,6 +102,7 @@ class MCPService:
 
     async def _tool_get_index_data(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
         overview, citations = await self.risk_engine.market.get_market_overview()
+        self.subs.emit("market://overview", overview)
         return ToolResponse(data=overview, citations=citations)
 
     async def _tool_get_top_gainers_losers(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
@@ -165,6 +166,7 @@ class MCPService:
 
     async def _tool_get_rbi_rates(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
         snapshot, citations = await self.risk_engine.macro.get_macro_snapshot()
+        self.subs.emit("macro://snapshot", snapshot)
         return ToolResponse(
             data={
                 "repo_rate": snapshot["repo_rate"],
@@ -178,6 +180,7 @@ class MCPService:
 
     async def _tool_get_inflation_data(self, _auth: AuthContext, _holdings: list[Holding], _payload: dict[str, Any]) -> ToolResponse:
         snapshot, citations = await self.risk_engine.macro.get_macro_snapshot()
+        self.subs.emit("macro://snapshot", snapshot)
         return ToolResponse(
             data={
                 "cpi_inflation": snapshot["cpi_inflation"],
@@ -280,6 +283,7 @@ class MCPService:
             if cached:
                 return ToolResponse(**cached)
             data, citations = await self.risk_engine.market.get_market_overview()
+            self.subs.emit("market://overview", data)
             response = ToolResponse(data=data, citations=citations)
             self.cache.set(cache_key, response.model_dump(), ttl_seconds=60)
             return response
@@ -289,6 +293,7 @@ class MCPService:
             if cached:
                 return ToolResponse(**cached)
             data, citations = await self.risk_engine.macro.get_macro_snapshot()
+            self.subs.emit("macro://snapshot", data)
             response = ToolResponse(data=data, citations=citations)
             self.cache.set(cache_key, response.model_dump(), ttl_seconds=1800)
             return response
